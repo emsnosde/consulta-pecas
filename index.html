@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>🔧 Agenda de Consultas de Peças</title>
+
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="manifest.json">
+
+  <!-- Seu CSS aqui -->
+  <link rel="stylesheet" href="styles.css">
+
+  <!-- PapaParse (CSV → JSON) -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.2/papaparse.min.js"></script>
+</head>
+<body>
+  <div class="container">
+    <h1>🔧 Agenda de Consultas de Peças</h1>
+
+    <!-- Status Online / Cache -->
+    <div id="statusCache" class="status">Carregando status...</div>
+
+    <!-- Botão atualizar forçando recarga do CSV -->
+    <button id="btnAtualizar">🔄 Atualizar Dados</button>
+
+    <!-- Estatísticas -->
+    <div id="estatisticas"></div>
+
+    <!-- Busca -->
+    <div class="search-bar">
+      <input type="text" id="inputBusca" placeholder="Digite o código da peça">
+      <button id="btnBuscar">🔍 Buscar</button>
+      <button id="btnLimpar">❌ Limpar</button>
+    </div>
+
+    <!-- Resultados -->
+    <div id="resultados"></div>
+  </div>
+
+  <script>
+    let todasPecas = [];
+
+    // ——— Cache em localStorage ——————————————————————
+    function salvarNoCache(data) {
+      localStorage.setItem('pecasCache', JSON.stringify(data));
+      localStorage.setItem('pecasCacheTime', Date.now());
+    }
+    function carregarDoCache() {
+      const s = localStorage.getItem('pecasCache');
+      try { return s ? JSON.parse(s) : null; }
+      catch { return null; }
+    }
+
+    // ——— UI de status e estatísticas ———————————————————
+    function atualizarStatusCache() {
+      const online = navigator.onLine;
+      const time = localStorage.getItem('pecasCacheTime');
+      const ago = time ? Math.floor((Date.now() - Number(time)) / 60000) : null;
+      document.getElementById('statusCache').textContent =
+        online
+          ? `✅ Online – cache local (${ago} min atrás)`
+          : `❌ Offline – cache local (${ago} min atrás)`;
+    }
+    function atualizarEstatisticas() {
+      const total = todasPecas.length;
+      const comImg = todasPecas.filter(p=>p.imagem).length;
+      const semImg = total - comImg;
+      document.getElementById('estatisticas').innerHTML =
+        `<p>📊 Estatísticas: ${total} peças cadastradas | ${comImg} com imagens | ${semImg} sem imagens</p>`;
+    }
+
+    // ——— Exibição de resultados ——————————————————————
+    function exibirResultados(lista) {
+      const cont = document.getElementById('resultados');
+      cont.innerHTML = '';
+      if (lista.length === 0) {
+        cont.innerHTML = '<p>Nenhum resultado encontrado.</p>';
+        return;
+      }
+      lista.forEach(p => {
+        const card = document.createElement('div');
+        card.className = 'card';
+
+        const img = document.createElement('img');
+        img.src = `images/pecas/${p.imagem}`;
+        img.alt = p.codigo;
+        img.onerror = ()=> img.src = 'images/placeholder.png';
+        card.append(img);
+
+        const info = document.createElement('div');
+        info.innerHTML = `
+          <span class="label">${p.codigo}</span>
+          <p><strong>Descrição:</strong> ${p.descricao}</p>
+        `;
+        card.append(info);
+        cont.append(card);
+      });
+    }
+
+    // ——— Busca por código —————————————————————————
+    function buscarCodigo() {
+      const termo = document.getElementById('inputBusca').value.trim().toUpperCase();
+      if (!termo) { exibirResultados(todasPecas); return; }
+      const res = todasPecas.filter(p => p.codigo.includes(termo));
+      exibirResultados(res);
+    }
+
+    // ——— Carregamento do CSV + PapaParse + Cache —————————
+    async function carregarDados(force = false) {
+      // 1) usa cache local se não for forçado
+      if (!force) {
+        const cache = carregarDoCache();
+        if (cache) {
+          todasPecas = cache;
+          atualizarEstatisticas();
+          atualizarStatusCache();
+          return;
+        }
+      }
+
+      // 2) busca CSV no disco (já cacheado pelo SW)
+      try {
+        const resp = await fetch('data/Tabela_de_Pecas.csv');
+        if (!resp.ok) throw new Error('Falha ao carregar CSV');
+        const csv = await resp.text();
+
+        const parsed = Papa.parse(csv, { header: true, skipEmptyLines: true });
+        todasPecas = parsed.data.map(r => ({
+          codigo: (r['OCORRÊNCIA'] || r['ocorrencia'] || '').trim(),
+          descricao: (r['DESCRIÇÃO']  || r['descricao']  || '').trim(),
+          imagem:  `${(r['OCORRÊNCIA'] || r['ocorrencia']).trim()}.png`
+        }));
+
+        salvarNoCache(todasPecas);
+        atualizarEstatisticas();
+        atualizarStatusCache();
+
+      } catch (e) {
+        console.error(e);
+        const cache = carregarDoCache();
+        if (cache) {
+          todasPecas = cache;
+          atualizarEstatisticas();
+          atualizarStatusCache();
+        } else {
+          document.getElementById('estatisticas').innerHTML =
+            `<p>⚠️ ${e.message}</p>`;
+          atualizarStatusCache();
+        }
+      }
+    }
+
+    // ——— Event Listeners ——————————————————————————
+    document.getElementById('btnAtualizar').addEventListener('click', ()=>carregarDados(true));
+    document.getElementById('btnBuscar')   .addEventListener('click', buscarCodigo);
+    document.getElementById('btnLimpar')   .addEventListener('click', () => {
+      document.getElementById('inputBusca').value = '';
+      exibirResultados(todasPecas);
+    });
+    window.addEventListener('online',  atualizarStatusCache);
+    window.addEventListener('offline', atualizarStatusCache);
+
+    // ——— Startup ——————————————————————————————
+    (async()=>{
+      await carregarDados();
+      exibirResultados(todasPecas);
+    })();
+
+    // ——— Registro do Service Worker ——————————————
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker
+        .register('sw.js')
+        .then(()=> console.log('SW registrado 🔥'))
+        .catch(err=> console.error('SW falhou:', err));
+    }
+  </script>
+</body>
+</html>
